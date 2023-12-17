@@ -1,81 +1,88 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
-#include <unistd.h>
-
+#include <string.h>
 
 #define MAX_CLIENTS 5
+#define MESSAGE_SIZE 256
 
-pthread_mutex_t mutex;
-pthread_cond_t cond;
+// 공유 자원을 위한 구조체
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    char message[MESSAGE_SIZE];
+} SharedData;
 
-int messageQueue[MAX_CLIENTS];
-int numClients = 0;
+SharedData shared_data;
 
-void *clientThread(void *arg) {
-    int clientID = *(int *)arg;
+// 클라이언트(자식) 쓰레드 함수
+void *client_thread(void *arg) {
+    int client_id = *((int *)arg);
 
     while (1) {
-        // Simulate sending a message
-        int message = rand() % 100;
-        pthread_mutex_lock(&mutex);
-        messageQueue[clientID] = message;
-        printf("Client %d: Sent message %d\n", clientID, message);
-        pthread_cond_signal(&cond);
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_lock(&shared_data.mutex);
 
-        // Simulate some delay between messages
-        sleep(2);
+        // 조건 변수를 사용하여 메시지를 기다림
+        while (shared_data.message[0] == '\0') {
+            pthread_cond_wait(&shared_data.cond, &shared_data.mutex);
+        }
+
+        // 메시지를 받고 출력
+        printf("Client %d received message: %s\n", client_id, shared_data.message);
+
+        // 메시지 초기화
+        shared_data.message[0] = '\0';
+
+        pthread_mutex_unlock(&shared_data.mutex);
     }
+
+    return NULL;
 }
 
-void *serverThread(void *arg) {
-    while (1) {
-        pthread_mutex_lock(&mutex);
+// 서버(부모) 쓰레드 함수
+void *server_thread(void *arg) {
+    int client_ids[MAX_CLIENTS];
+    pthread_t clients[MAX_CLIENTS];
 
-        // Wait for a message from any client
-        while (numClients == 0) {
-            pthread_cond_wait(&cond, &mutex);
-        }
-
-        // Broadcast the message to all clients
-        for (int i = 0; i < MAX_CLIENTS; ++i) {
-            if (messageQueue[i] != -1) {
-                printf("Server: Broadcasting message %d to Client %d\n", messageQueue[i], i);
-                messageQueue[i] = -1;
-            }
-        }
-
-        pthread_mutex_unlock(&mutex);
+    // 클라이언트(자식) 쓰레드들 생성
+    for (int i = 0; i < MAX_CLIENTS; ++i) {
+        client_ids[i] = i + 1;
+        pthread_create(&clients[i], NULL, client_thread, &client_ids[i]);
     }
+
+    while (1) {
+        char message[MESSAGE_SIZE];
+
+        // 메시지 입력 받음
+        printf("Enter message to broadcast: ");
+        fgets(message, MESSAGE_SIZE, stdin);
+
+        // 메시지를 모든 클라이언트에게 방송
+        pthread_mutex_lock(&shared_data.mutex);
+
+        for (int i = 0; i < MAX_CLIENTS; ++i) {
+            // 메시지를 복사하고 조건 변수를 사용하여 클라이언트에게 알림
+            strcpy(shared_data.message, message);
+            pthread_cond_signal(&shared_data.cond);
+        }
+
+        pthread_mutex_unlock(&shared_data.mutex);
+    }
+
+    return NULL;
 }
 
 int main() {
-    pthread_t server, clients[MAX_CLIENTS];
-    int clientIDs[MAX_CLIENTS];
+    // 초기화
+    shared_data.message[0] = '\0';
+    pthread_mutex_init(&shared_data.mutex, NULL);
+    pthread_cond_init(&shared_data.cond, NULL);
 
-    // Initialize mutex and condition variable
-    pthread_mutex_init(&mutex, NULL);
-    pthread_cond_init(&cond, NULL);
+    pthread_t server_thread_id;
+    pthread_create(&server_thread_id, NULL, server_thread, NULL);
 
-    // Create server thread
-    pthread_create(&server, NULL, serverThread, NULL);
-
-    // Create client threads
-    for (int i = 0; i < MAX_CLIENTS; ++i) {
-        clientIDs[i] = i;
-        pthread_create(&clients[i], NULL, clientThread, &clientIDs[i]);
-    }
-
-    // Join threads (this won't actually happen in this example)
-    pthread_join(server, NULL);
-    for (int i = 0; i < MAX_CLIENTS; ++i) {
-        pthread_join(clients[i], NULL);
-    }
-
-    // Cleanup
-    pthread_mutex_destroy(&mutex);
-    pthread_cond_destroy(&cond);
+    // 대기
+    pthread_join(server_thread_id, NULL);
 
     return 0;
 }
