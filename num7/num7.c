@@ -3,123 +3,119 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <sys/socket.h>
 
-#define MAX_REQUEST_SIZE 2048
-#define MAX_RESPONSE_SIZE 2048
+#define MAX_REQUEST_SIZE 8192
+#define MAX_RESPONSE_SIZE 8192
 
-void handleGET(int clientSocket, const char *path) {
+void handle_get(int client_socket, const char *path) {
     char response[MAX_RESPONSE_SIZE];
     FILE *file = fopen(path, "r");
 
-    if (file == NULL) {
-        sprintf(response, "HTTP/1.1 404 Not Found\r\n\r\n");
-    } else {
+    if (file != NULL) {
         sprintf(response, "HTTP/1.1 200 OK\r\n\r\n");
-        char buffer[MAX_RESPONSE_SIZE];
-        while (fgets(buffer, sizeof(buffer), file) != NULL) {
-            strcat(response, buffer);
+        send(client_socket, response, strlen(response), 0);
+
+        while (fgets(response, MAX_RESPONSE_SIZE, file) != NULL) {
+            send(client_socket, response, strlen(response), 0);
         }
+
         fclose(file);
+    } else {
+        sprintf(response, "HTTP/1.1 404 Not Found\r\n\r\n");
+        send(client_socket, response, strlen(response), 0);
     }
-
-    send(clientSocket, response, strlen(response), 0);
 }
 
-void handlePOST(int clientSocket, const char *path, const char *data) {
-    // Implement your own POST handling logic here
-    // This is a simple example and does not handle data or perform any action
+void handle_post(int client_socket, const char *path, const char *content) {
     char response[MAX_RESPONSE_SIZE];
-    sprintf(response, "HTTP/1.1 200 OK\r\n\r\nPOST request received at %s", path);
-    send(clientSocket, response, strlen(response), 0);
+
+    // 여기에서는 단순히 content를 출력합니다.
+    printf("Received POST data:\n%s\n", content);
+
+    // 클라이언트에 응답을 보냅니다.
+    sprintf(response, "HTTP/1.1 200 OK\r\n\r\n");
+    send(client_socket, response, strlen(response), 0);
+
+    sprintf(response, "<html><body><h1>Received POST data:</h1><p>%s</p></body></html>", content);
+    send(client_socket, response, strlen(response), 0);
 }
 
-void handleRequest(int clientSocket, const char *request) {
-    char method[10], path[255];
-    sscanf(request, "%s %s", method, path);
+void handle_request(int client_socket, const char *request) {
+    char method[10], path[100], protocol[20];
+
+    sscanf(request, "%s %s %s", method, path, protocol);
 
     if (strcmp(method, "GET") == 0) {
-        handleGET(clientSocket, path);
+        handle_get(client_socket, path + 1);  // Skip the leading '/'
     } else if (strcmp(method, "POST") == 0) {
-        // Extract data from POST request
-        char *dataStart = strstr(request, "\r\n\r\n");
-        if (dataStart != NULL) {
-            dataStart += 4;  // Move past the "\r\n\r\n"
-            handlePOST(clientSocket, path, dataStart);
+        char *content_start = strstr(request, "\r\n\r\n");
+        if (content_start != NULL) {
+            content_start += 4;  // Move past the empty line
+            handle_post(client_socket, path + 1, content_start);
         } else {
             // Invalid POST request
-            char response[MAX_RESPONSE_SIZE];
-            sprintf(response, "HTTP/1.1 400 Bad Request\r\n\r\n");
-            send(clientSocket, response, strlen(response), 0);
+            printf("Invalid POST request\n");
         }
     } else {
         // Unsupported method
-        char response[MAX_RESPONSE_SIZE];
-        sprintf(response, "HTTP/1.1 501 Not Implemented\r\n\r\n");
-        send(clientSocket, response, strlen(response), 0);
+        printf("Unsupported HTTP method: %s\n", method);
     }
 }
 
+
+
 int main() {
-    int serverSocket, clientSocket;
-    struct sockaddr_in serverAddr, clientAddr;
-    socklen_t clientAddrLen = sizeof(clientAddr);
+    int server_socket, client_socket;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_size = sizeof(struct sockaddr_in);
     char request[MAX_REQUEST_SIZE];
 
-    // Create server socket
-    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSocket == -1) {
-        perror("Error creating server socket");
+    // 소켓 초기화
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket == -1) {
+        perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
 
-    // Set up server address structure
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
-    serverAddr.sin_port = htons(8080);
+    // 서버 주소 설정
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(8080);  // 포트번호 8080 사용
 
-    // Bind server socket
-    if (bind(serverSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == -1) {
-        perror("Error binding server socket");
+    // 바인딩
+    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
+        perror("Bind failed");
         exit(EXIT_FAILURE);
     }
 
-    // Listen for incoming connections
-    if (listen(serverSocket, 5) == -1) {
-        perror("Error listening for connections");
+    // 리스닝
+    if (listen(server_socket, 10) == -1) {
+        perror("Listen failed");
         exit(EXIT_FAILURE);
     }
 
-    printf("Server listening on port 8080...\n");
+    printf("Server is listening on port 8080...\n");
 
     while (1) {
-        // Accept incoming connection
-        clientSocket = accept(serverSocket, (struct sockaddr*)&clientAddr, &clientAddrLen);
-        if (clientSocket == -1) {
-            perror("Error accepting connection");
+        // 클라이언트 연결 수락
+        client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &addr_size);
+        if (client_socket == -1) {
+            perror("Accept failed");
             continue;
         }
 
-        printf("Client connected, IP: %s, Port: %d\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port));
+        // 클라이언트로부터 HTTP 요청 수신
+        recv(client_socket, request, MAX_REQUEST_SIZE, 0);
 
-        // Receive request from client
-        ssize_t bytesRead = recv(clientSocket, request, sizeof(request), 0);
-        if (bytesRead > 0) {
-            // Null-terminate the request string
-            request[bytesRead] = '\0';
+        // HTTP 요청 처리
+        handle_request(client_socket, request);
 
-            // Handle the request
-            handleRequest(clientSocket, request);
-        }
-
-        // Close the client socket
-        close(clientSocket);
-        printf("Client disconnected.\n");
+        // 클라이언트 소켓 닫기
+        close(client_socket);
     }
 
-    // Close the server socket
-    close(serverSocket);
+    // 서버 소켓 닫기
+    close(server_socket);
 
     return 0;
 }
